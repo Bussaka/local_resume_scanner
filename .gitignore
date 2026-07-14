@@ -1,0 +1,12 @@
+# Python virtual environment
+venv/
+.venv/
+__pycache__/
+*.pyc
+
+# Local SQLite database
+p_database/*.db
+
+# Editor configurations
+.vscode/
+.DS_Store
