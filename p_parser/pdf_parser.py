@@ -1,3 +1,4 @@
+import io
 import re
 from pypdf import PdfReader
 
@@ -17,9 +18,9 @@ def clean_extracted_text(text: str) -> str:
     
     return text.strip()
 
-def parse_pdf_to_text(pdf_path: str) -> str:
+def parse_pdf_to_text(pdf_path) -> str:
     """
-    Extracts layout-aware, clean plain text from a PDF file.
+    Extracts layout-aware, clean plain text from a PDF file (path or file-like object).
     Uses layout mode to handle multi-column formats gracefully.
     """
     try:
@@ -37,4 +38,32 @@ def parse_pdf_to_text(pdf_path: str) -> str:
         return clean_extracted_text(full_text)
         
     except Exception as e:
-        raise RuntimeError(f"Failed to parse PDF at {pdf_path}: {str(e)}")
+        raise RuntimeError(f"Failed to parse PDF: {str(e)}")
+
+def parse_docx_to_text(docx_file) -> str:
+    """Extracts clean plain text from a DOCX file (path or file-like object), tables included."""
+    import docx  # python-docx; imported lazily so PDF-only callers don't need it
+    
+    try:
+        document = docx.Document(docx_file)
+        lines = [p.text for p in document.paragraphs]
+        for table in document.tables:
+            for row in table.rows:
+                lines.append(" | ".join(cell.text for cell in row.cells))
+        return clean_extracted_text("\n".join(lines))
+    
+    except Exception as e:
+        raise RuntimeError(f"Failed to parse DOCX: {str(e)}")
+
+
+SUPPORTED_EXTENSIONS = (".pdf", ".docx")
+
+
+def parse_document_bytes(data: bytes, filename: str) -> str:
+    """Parses an uploaded PDF or DOCX held in memory, dispatching on its extension."""
+    name = filename.lower()
+    if name.endswith(".pdf"):
+        return parse_pdf_to_text(io.BytesIO(data))
+    if name.endswith(".docx"):
+        return parse_docx_to_text(io.BytesIO(data))
+    raise ValueError(f"Unsupported file type: {filename}. Upload a PDF or DOCX.")
