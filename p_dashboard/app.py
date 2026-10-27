@@ -3,6 +3,7 @@ import os
 import streamlit as st
 import pandas as pd
 import plotly.express as px
+import ollama
 
 # 1. Resolve Pathing Setup First
 # This ensures Python can locate sibling directories like 1_parser and 2_database
@@ -95,15 +96,31 @@ else:
         if st.button("⚡ Run Dynamic AI Screen", type="primary"):
             job_id = db_manager.insert_job(job_title)
             
+            st.session_state["job_id"] = job_id
+
             progress_bar = st.progress(0)
             status_text = st.empty()
-            
+            failures = []
+
             for idx, cand in enumerate(candidates):
                 status_text.write(f"Evaluating Candidate {idx + 1}/{len(candidates)} ({cand['filename']})...")
-                
+
                 # Run evaluation via local Ollama Engine
-                scorecard = evaluate_resume(cand['raw_text'], st.session_state["criteria"])
-                
+                try:
+                    scorecard = evaluate_resume(cand['raw_text'], st.session_state["criteria"])
+                except ConnectionError:
+                    # Ollama is down: every remaining candidate would fail the same way
+                    failures.append((cand['filename'], "Could not connect to Ollama. Is it running?"))
+                    break
+                except ollama.ResponseError as e:
+                    failures.append((cand['filename'], f"Ollama error: {e.error}"))
+                    if e.status_code == 404:  # Model not pulled; no point retrying the rest
+                        break
+                    continue
+                except Exception as e:
+                    failures.append((cand['filename'], str(e)))
+                    continue
+
                 # Commit individual criteria parameters to Database
                 for match in scorecard.criteria_evaluations:
                     db_manager.save_evaluation(
@@ -118,16 +135,24 @@ else:
                 
             status_text.empty()
             progress_bar.empty()
-            st.success("Screening Complete!")
+            if failures:
+                st.warning(f"Screening finished with {len(failures)} failure(s):")
+                for filename, reason in failures:
+                    st.write(f"- **{filename}**: {reason}")
+            else:
+                st.success("Screening Complete!")
+
+        # Show only the latest run for this job, so old runs and old criteria never mix in
+        job_row = conn.execute("SELECT title FROM jobs WHERE id = ?", (st.session_state.get("job_id"),)).fetchone()
+        job_id = st.session_state["job_id"] if job_row and job_row["title"] == job_title else db_manager.get_latest_job_id(job_title)
 
         # Pull scorecards for current job context
         eval_data = conn.execute("""
-            SELECT c.id, c.filename, e.criterion_name, e.is_matched, e.evidence, e.score 
+            SELECT c.id, c.filename, e.criterion_name, e.is_matched, e.evidence, e.score
             FROM candidates c
             JOIN evaluations e ON c.id = e.candidate_id
-            JOIN jobs j ON e.job_id = j.id
-            WHERE j.title = ?
-        """, (job_title,)).fetchall()
+            WHERE e.job_id = ?
+        """, (job_id,)).fetchall()
         
         if eval_data:
             df = pd.DataFrame(eval_data, columns=["id", "filename", "criteria", "matched", "evidence", "score"])

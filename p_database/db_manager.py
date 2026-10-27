@@ -69,6 +69,14 @@ def insert_job(title: str) -> int:
         conn.commit()
         return cursor.lastrowid
 
+def get_latest_job_id(title: str):
+    """Returns the id of the most recent screening run for a job title, or None."""
+    with get_db_connection() as conn:
+        row = conn.execute(
+            "SELECT id FROM jobs WHERE title = ? ORDER BY id DESC LIMIT 1", (title,)
+        ).fetchone()
+        return row["id"] if row else None
+
 def save_evaluation(candidate_id: int, job_id: int, criterion_name: str, is_matched: bool, evidence: str, score: int):
     with get_db_connection() as conn:
         cursor = conn.cursor()
