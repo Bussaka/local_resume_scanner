@@ -4,9 +4,15 @@ venv/
 __pycache__/
 *.pyc
 
-# Local SQLite database
-p_database/*.db
-
 # Editor configurations
 .vscode/
 .DS_Store
+
+# App runtime data (database + uploaded resumes)
+data/
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+*.tsbuildinfo
+.pytest_cache/
