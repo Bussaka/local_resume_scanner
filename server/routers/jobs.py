@@ -38,6 +38,18 @@ def _read_upload(file: UploadFile) -> tuple[str, bytes]:
     return filename, data
 
 
+def purge_orphan_candidates(db: Session, candidate_ids: set[int]) -> None:
+    """Deletes resumes (row and file) that no longer belong to any job, so personal data isn't kept forever."""
+    still_used = select(Application.id).where(Application.candidate_id == Candidate.id).exists()
+    orphans = db.scalars(select(Candidate).where(Candidate.id.in_(candidate_ids), ~still_used)).all()
+    for candidate in orphans:
+        db.delete(candidate)
+    db.commit()
+    # Files go after the commit: a failed commit must not leave rows pointing at deleted files
+    for candidate in orphans:
+        (FILES_DIR / f"{candidate.file_hash}{candidate.file_ext}").unlink(missing_ok=True)
+
+
 def _job_stats(db: Session, job_ids: list[int]) -> dict[int, dict]:
     rows = db.execute(
         select(
@@ -109,8 +121,11 @@ def update_job(job_id: int, body: JobUpdate, db: Session = Depends(get_db)):
 
 @router.delete("/{job_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[Depends(require_admin)])
 def delete_job(job_id: int, db: Session = Depends(get_db)):
-    db.delete(_get_job(db, job_id))
+    job = _get_job(db, job_id)
+    candidate_ids = {a.candidate_id for a in job.applications}
+    db.delete(job)
     db.commit()
+    purge_orphan_candidates(db, candidate_ids)
 
 
 # --- Organisation documents & requirement extraction ---
@@ -227,6 +242,7 @@ def upload_resumes(job_id: int, files: list[UploadFile] = File(...), user: User 
     # Screening starts automatically once the job has requirements
     auto_queue = bool(job.requirements)
     result = UploadResult(added=0, duplicates=[], failed=[], queued=auto_queue)
+    written = {}  # file_hash -> path written by this request
     for file in files:
         try:
             filename, data = _read_upload(file)
@@ -237,7 +253,9 @@ def upload_resumes(job_id: int, files: list[UploadFile] = File(...), user: User 
                 if len(text.strip()) < MIN_RESUME_CHARS:
                     raise ValueError("Almost no text could be read. This is probably a scanned or image-only file.")
                 ext = os.path.splitext(filename)[1].lower()
-                (FILES_DIR / f"{file_hash}{ext}").write_bytes(data)
+                path = FILES_DIR / f"{file_hash}{ext}"
+                path.write_bytes(data)
+                written[file_hash] = path
                 candidate = Candidate(filename=filename, file_hash=file_hash, file_ext=ext, raw_text=text, uploaded_by_id=user.id)
                 db.add(candidate)
                 db.flush()
@@ -252,7 +270,16 @@ def upload_resumes(job_id: int, files: list[UploadFile] = File(...), user: User 
             screening_status="queued" if auto_queue else "pending", queued_at=utcnow() if auto_queue else None,
         ))
         result.added += 1
-    db.commit()
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        # Remove files the failed commit left without a row; keep any a concurrent upload of the same resume committed
+        saved = set(db.scalars(select(Candidate.file_hash).where(Candidate.file_hash.in_(written))))
+        for file_hash, path in written.items():
+            if file_hash not in saved:
+                path.unlink(missing_ok=True)
+        raise
     if auto_queue and result.added:
         worker.notify()
     return result

@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 from server.config import FILES_DIR
 from server.db import get_db
 from server.models import Application, Candidate, User, utcnow
-from server.routers.jobs import application_row
+from server.routers.jobs import application_row, purge_orphan_candidates
 from server.schemas import ApplicationDetail, ApplicationUpdate, EvaluationOut
 from server.security import current_user
 
@@ -68,9 +68,12 @@ def update_application(application_id: int, body: ApplicationUpdate, user: User 
 
 @router.delete("/applications/{application_id}", status_code=status.HTTP_204_NO_CONTENT)
 def remove_application(application_id: int, db: Session = Depends(get_db)):
-    """Removes the candidate from this job only; their resume stays available for other jobs."""
-    db.delete(_get_application(db, application_id))
+    """Removes the candidate from this job; their resume is deleted too unless another job still uses it."""
+    app = _get_application(db, application_id)
+    candidate_id = app.candidate_id
+    db.delete(app)
     db.commit()
+    purge_orphan_candidates(db, {candidate_id})
 
 
 @router.get("/candidates/{candidate_id}/file")
