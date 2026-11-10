@@ -1,6 +1,7 @@
 from datetime import date
 from pydantic import BaseModel, Field, create_model
 from typing import List, Literal
+import httpx
 import ollama
 
 # Ollama's default context window (2048-4096 tokens) silently truncates long resumes.
@@ -11,6 +12,14 @@ CHARS_PER_TOKEN = 3          # Conservative; English text averages ~4 chars per 
 OUTPUT_TOKENS_PER_CRITERION = 300
 OUTPUT_TOKENS_BASE = 500
 EXTRACTION_OUTPUT_TOKENS = 3000
+# Without a timeout a hung Ollama blocks the single worker forever; CPU-only runs take ~1 min, so this is generous
+OLLAMA_TIMEOUT_SECONDS = 600
+
+def _chat(**kwargs):
+    try:
+        return ollama.Client(timeout=OLLAMA_TIMEOUT_SECONDS).chat(**kwargs)
+    except httpx.TimeoutException as e:
+        raise TimeoutError(f"The AI model did not respond within {OLLAMA_TIMEOUT_SECONDS // 60} minutes.") from e
 
 # 1. Declare Pydantic Data Structures for Constrained Decoding
 class CriterionAssessment(BaseModel):
@@ -101,7 +110,7 @@ def evaluate_resume(resume_text: str, criteria_list: List[str], model_name: str 
         OUTPUT_TOKENS_BASE + OUTPUT_TOKENS_PER_CRITERION * len(criteria_list),
     )
 
-    response = ollama.chat(
+    response = _chat(
         model=model_name,
         messages=[
             {"role": "system", "content": system_prompt},
@@ -147,7 +156,7 @@ def extract_requirements(document_text: str, job_title: str, model_name: str = "
     user_prompt = f"Organisation documents:\n---\n{document_text}\n---"
     num_ctx = _required_num_ctx(len(system_prompt) + len(user_prompt), EXTRACTION_OUTPUT_TOKENS)
 
-    response = ollama.chat(
+    response = _chat(
         model=model_name,
         messages=[
             {"role": "system", "content": system_prompt},

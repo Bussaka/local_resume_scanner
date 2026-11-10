@@ -98,3 +98,47 @@ def test_scanned_resume_is_rejected(admin):
     jid = admin.post("/api/jobs", json={"title": "X"}).json()["id"]
     result = admin.post(f"/api/jobs/{jid}/applications", files=[("files", ("scan.docx", make_docx("Jane"), "x"))]).json()
     assert result["added"] == 0 and "scanned" in result["failed"][0]["error"]
+
+
+def test_repeated_failed_logins_are_locked_out(client):
+    for _ in range(10):
+        assert client.post("/api/auth/login", json={**ADMIN, "password": "wrong-password"}).status_code == 401
+    # Even the right password is refused during the lockout
+    assert client.post("/api/auth/login", json=ADMIN).status_code == 429
+
+
+def test_removed_resumes_are_deleted_unless_another_job_uses_them(admin):
+    from server.config import FILES_DIR
+
+    j1 = admin.post("/api/jobs", json={"title": "A"}).json()["id"]
+    j2 = admin.post("/api/jobs", json={"title": "B"}).json()["id"]
+    alice, bob = resume("Alice", "x"), resume("Bob", "y")
+    admin.post(f"/api/jobs/{j1}/applications", files=[("files", ("a.docx", alice, "x")), ("files", ("b.docx", bob, "x"))])
+    admin.post(f"/api/jobs/{j2}/applications", files=[("files", ("a.docx", alice, "x"))])
+    rows = {r["filename"][0]: r for r in admin.get(f"/api/jobs/{j1}/applications").json()}
+    assert len(list(FILES_DIR.iterdir())) == 2
+
+    # Alice is still in job B, so her resume survives removal from job A
+    admin.delete(f"/api/applications/{rows['a']['id']}")
+    assert admin.get(f"/api/candidates/{rows['a']['candidate_id']}/file").status_code == 200
+
+    # Deleting job A drops Bob's resume, the only one used by nothing else
+    admin.delete(f"/api/jobs/{j1}")
+    assert admin.get(f"/api/candidates/{rows['b']['candidate_id']}/file").status_code == 404
+    assert len(list(FILES_DIR.iterdir())) == 1
+
+    # Removing Alice from her last job deletes her resume too
+    admin.delete(f"/api/applications/{admin.get(f'/api/jobs/{j2}/applications').json()[0]['id']}")
+    assert list(FILES_DIR.iterdir()) == []
+
+
+def test_ollama_timeout_becomes_clear_error(monkeypatch):
+    import httpx
+    import pytest
+    from p_evaluator import eval_engine
+
+    def hang(self, **kwargs):
+        raise httpx.ReadTimeout("timed out")
+    monkeypatch.setattr(eval_engine.ollama.Client, "chat", hang)
+    with pytest.raises(TimeoutError, match="did not respond"):
+        eval_engine.evaluate_resume("Alice resume", ["Knows Python"])

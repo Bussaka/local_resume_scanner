@@ -15,6 +15,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 from p_evaluator.eval_engine import CriteriaMatch, ExtractedRequirement, ResumeScorecard  # noqa: E402
 from server import worker as worker_module  # noqa: E402
+from server.config import FILES_DIR  # noqa: E402
 from server.db import Base, SessionLocal, engine, init_db  # noqa: E402
 from server.main import app  # noqa: E402
 from server.models import User  # noqa: E402
@@ -74,8 +75,12 @@ def wait_until(predicate, timeout=10):
 def client(monkeypatch):
     monkeypatch.setattr(worker_module, "extract_requirements", fake_extract)
     monkeypatch.setattr(worker_module, "evaluate_resume", fake_evaluate)
+    from server.routers import auth
+    auth._failed_logins.clear()
     Base.metadata.drop_all(engine)
     init_db()
+    for f in FILES_DIR.iterdir():
+        f.unlink()
     with SessionLocal() as db:
         db.add(User(email=ADMIN["email"], full_name="Admin", password_hash=hash_password(ADMIN["password"]), role="admin"))
         db.commit()

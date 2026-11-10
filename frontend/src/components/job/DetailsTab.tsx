@@ -118,8 +118,8 @@ export function DetailsTab({ job }: { job: JobDetail }) {
                   <AlertDialogHeader>
                     <AlertDialogTitle>Delete “{job.title}”?</AlertDialogTitle>
                     <AlertDialogDescription>
-                      This permanently deletes {job.candidate_count} candidate results and HR decisions for this job. Resumes stay
-                      available for other jobs. This cannot be undone.
+                      This permanently deletes {job.candidate_count} candidate results and HR decisions for this job. Resumes not used by
+                      another job are deleted too. This cannot be undone.
                     </AlertDialogDescription>
                   </AlertDialogHeader>
                   <AlertDialogFooter>
